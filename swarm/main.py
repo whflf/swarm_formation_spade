@@ -1,28 +1,31 @@
-"""
-main.py — запуск SPSA-консенсуса + гибридного LVP на SPADE.
-
-Запуск:
-    python3 main.py
-
-Фазы:
-  1. Warmup (WARMUP_ITERS итераций): чистый SPSA, рой стоит.
-  2. Управление (CONTROL_ITERS тиков × SPSA_PER_TICK итераций):
-     гибридный LVP + движение под джойстиком.
-"""
 import sys
 
-sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
+sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 
 import asyncio
+
 import numpy as np
 import spade
 
+from config import (
+    AGENTS_CREDENTIALS,
+    AREA_SIZE,
+    BEARING_NOISE,
+    CENTER_JID,
+    CONTROL_ITERS,
+    FORMATION_SIDE,
+    ITERATIONS,
+    NEIGHBORS,
+    NOISE_SCALE,
+    SEED,
+    WARMUP_ITERS,
+    N,
+)
+from robot_swarm_simulator import NoiseType, RobotSwarmSimulator
 from spsa_formation_agent import SPSAFormationAgent, make_formation_square
-from robot_swarm_simulator import RobotSwarmSimulator, NoiseType
-from config import *
 
 
-def dist_residual(table_row, sim):
+def dist_residual(table_row: list, sim: RobotSwarmSimulator) -> float:
     res = []
     for i in range(N):
         if table_row[i] is None:
@@ -35,19 +38,19 @@ def dist_residual(table_row, sim):
     return float(np.mean(res)) if res else 0.0
 
 
-def formation_error(sim, corners_assigned):
+def formation_error(sim: RobotSwarmSimulator, corners_assigned: dict) -> float:
     Q = np.array([corners_assigned[i] for i in range(N)])
-    v, c = 0.0, 0
+    total = count = 0.0
     for i in range(N):
         for j in range(i + 1, N):
             td = np.linalg.norm(Q[i] - Q[j])
             ad = np.linalg.norm(sim.true_positions[i] - sim.true_positions[j])
-            v += abs(td - ad)
-            c += 1
-    return v / c if c else 0.0
+            total += abs(td - ad)
+            count += 1
+    return total / count if count else 0.0
 
 
-async def main():
+async def main() -> None:
     sim = RobotSwarmSimulator(
         num_robots=N,
         noise_type=NoiseType.UNIFORM,
@@ -63,7 +66,7 @@ async def main():
         for i in range(N)
     }
 
-    iterations_table = [[None] * N]
+    iterations_table: list = [[None] * N]
     iterations_table[0] = [
         {j: init_estimates[i][j].copy() for j in range(N)} for i in range(N)
     ]
@@ -93,7 +96,7 @@ async def main():
     t0 = asyncio.get_event_loop().time()
     last_reported = -1
     prev_warmup_done = False
-    corners_assigned = {}
+    corners_assigned: dict = {}
 
     while True:
         cur = min(a.iteration for a in agents)
@@ -132,12 +135,14 @@ async def main():
 
     await asyncio.gather(*(a.stop() for a in agents))
 
-    fe_final = formation_error(sim, corners_assigned) if corners_assigned else float('nan')
+    fe_final = formation_error(sim, corners_assigned) if corners_assigned else float("nan")
     row_final = iterations_table[-1] if iterations_table else [None] * N
     dr_final = dist_residual(row_final, sim)
 
     print("\n" + "=" * 60)
     print(f"ИТОГ:  form_err={fe_final:.3f} м   dist_res={dr_final:.3f} м")
+    print(f"Сообщений: {sum(a.msgs_sent for a in agents)}")
+    print(f"Арифм. операций: {sum(a.arith_ops for a in agents)}")
     print("\nИстинные позиции:")
     for i in range(N):
         print(f"  р{i}: {sim.true_positions[i].round(3)}")
