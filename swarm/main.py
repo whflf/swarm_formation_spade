@@ -5,7 +5,6 @@ sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 import asyncio
 
 import numpy as np
-import spade
 
 from .config import (
     AGENTS_CREDENTIALS,

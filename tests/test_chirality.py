@@ -1,5 +1,6 @@
 """Tests for chirality (reflection) detection."""
 import math
+
 import numpy as np
 
 from swarm.spsa_formation_agent import detect_map_reflection, make_formation_polygon

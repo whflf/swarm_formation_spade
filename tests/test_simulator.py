@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pytest
 
-from swarm.robot_swarm_simulator import NoiseType, RobotSwarmSimulator
+from swarm.robot_swarm_simulator import RobotSwarmSimulator
 
 
 @pytest.fixture
