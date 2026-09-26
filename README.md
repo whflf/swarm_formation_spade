@@ -135,10 +135,10 @@ python validation/validate_formation.py
 ```
 ==================================================
 ИТОГ (seed=7):
-  form_err min  = 0.481 м
-  form_err tail = 0.489 м
-  dist_res      = 0.161 м
-  scale         = 0.997
+  form_err min  = 0.018 м
+  form_err tail = 0.041 м
+  dist_res      = 0.083 м
+  scale         = 0.984
 ```
 
 Поле `scale` — Procrustes-масштаб карты относительно реальных позиций (1.0 = идеально).
