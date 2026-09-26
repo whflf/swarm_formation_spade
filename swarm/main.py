@@ -7,7 +7,7 @@ import asyncio
 import numpy as np
 import spade
 
-from config import (
+from .config import (
     AGENTS_CREDENTIALS,
     AREA_SIZE,
     BEARING_NOISE,
@@ -21,8 +21,8 @@ from config import (
     WARMUP_ITERS,
     N,
 )
-from robot_swarm_simulator import NoiseType, RobotSwarmSimulator
-from spsa_formation_agent import SPSAFormationAgent, make_formation_square
+from .robot_swarm_simulator import NoiseType, RobotSwarmSimulator
+from .spsa_formation_agent import SPSAFormationAgent, make_formation_square
 
 
 def dist_residual(table_row: list, sim: RobotSwarmSimulator) -> float:
@@ -148,5 +148,3 @@ async def main() -> None:
         print(f"  р{i}: {sim.true_positions[i].round(3)}")
 
 
-if __name__ == "__main__":
-    spade.run(main(), embedded_xmpp_server=True)

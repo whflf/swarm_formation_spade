@@ -10,7 +10,7 @@ from spade.behaviour import CyclicBehaviour, PeriodicBehaviour
 from spade.message import Message
 from spade.template import Template
 
-from config import (
+from .config import (
     AGENT_UP_PROBABILITY,
     AGENTS_CREDENTIALS,
     ALPHA,
@@ -39,6 +39,34 @@ from config import (
 
 def _wrap(a: float) -> float:
     return (a + np.pi) % (2 * np.pi) - np.pi
+
+
+def detect_map_reflection(
+    theta: dict[int, np.ndarray],
+    bearings: dict[int, float],
+    self_idx: int,
+) -> bool:
+    """
+    Return True when the local SPSA map has wrong chirality.
+    Distance-only consensus cannot distinguish a configuration from its
+    mirror; bearings disambiguate via the sign of cross-products.
+    """
+    self_pos = theta[self_idx]
+    nbs = [j for j in bearings if j != self_idx]
+    votes = total = 0
+    for a in range(len(nbs)):
+        for b in range(a + 1, len(nbs)):
+            j, k = nbs[a], nbs[b]
+            vj = theta[j] - self_pos
+            vk = theta[k] - self_pos
+            cross_map = vj[0] * vk[1] - vj[1] * vk[0]
+            cross_real = np.sin(_wrap(bearings[k] - bearings[j]))
+            if abs(cross_map) < 1e-9 or abs(cross_real) < 1e-6:
+                continue
+            if np.sign(cross_map) != np.sign(cross_real):
+                votes += 1
+            total += 1
+    return (votes > total / 2) if total > 0 else False
 
 
 def make_formation_polygon(n: int | None = None, side: float = FORMATION_SIDE):
@@ -154,27 +182,7 @@ class SPSAFormationAgent(Agent):
     # ── chirality correction ─────────────────────────────────────────────────
 
     def detect_reflection(self, bearings: dict[int, float]) -> bool:
-        """
-        Return True when the local SPSA map has wrong chirality.
-        Distance-only consensus cannot distinguish a configuration from its
-        mirror; bearings disambiguate via the sign of cross-products.
-        """
-        self_pos = self.theta[self.index]
-        nbs = [j for j in bearings if j != self.index]
-        votes = total = 0
-        for a in range(len(nbs)):
-            for b in range(a + 1, len(nbs)):
-                j, k = nbs[a], nbs[b]
-                vj = self.theta[j] - self_pos
-                vk = self.theta[k] - self_pos
-                cross_map = vj[0] * vk[1] - vj[1] * vk[0]
-                cross_real = np.sin(_wrap(bearings[k] - bearings[j]))
-                if abs(cross_map) < 1e-9 or abs(cross_real) < 1e-6:
-                    continue
-                if np.sign(cross_map) != np.sign(cross_real):
-                    votes += 1
-                total += 1
-        return (votes > total / 2) if total > 0 else False
+        return detect_map_reflection(self.theta, bearings, self.index)
 
     def fix_reflection(self) -> None:
         """Flip the map across the y-axis relative to its centroid."""

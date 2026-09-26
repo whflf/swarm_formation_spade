@@ -7,11 +7,6 @@ Expected results on seed=7:
   form_err (tail)        < 0.10 m
   scale                 ≈ 1.00
 """
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(__file__))
-
 from random import random
 
 import numpy as np
