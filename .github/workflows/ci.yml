@@ -18,7 +18,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install numpy scipy spade ruff pytest
+        run: pip install numpy scipy "spade>=3.3" "sqlalchemy[asyncio]" greenlet ruff pytest
 
       - name: Lint (ruff)
         run: ruff check .
