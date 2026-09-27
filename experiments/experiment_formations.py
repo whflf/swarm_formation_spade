@@ -1,13 +1,12 @@
 """
-Vectorised full pipeline (warmup → assignment → control) for large N.
-Uses numpy array operations instead of dicts; suitable for scaling studies.
+Test the full SPSA + LVP pipeline for arbitrary formation shapes.
+Includes chirality correction.
 
 Usage:
-    python test_scale_fast.py --n 20 --seed 7 --warmup 8000 --ctrl 150
-    python test_scale_fast.py --n 4  --seed 7 --warmup 200  --ctrl 5  # quick test
+    python experiment_formations.py --n 6 --seed 7 --formation polygon
+    python experiment_formations.py --n 8 --formation grid
 """
 import argparse
-import time
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -22,7 +21,36 @@ def _wrap(a: float) -> float:
     return (a + np.pi) % (2 * np.pi) - np.pi
 
 
-def _make_polygon(n: int, side: float = 2.0) -> dict[int, np.ndarray]:
+# ── formation generators ──────────────────────────────────────────────────────
+
+def formation_line(n: int, spacing: float = 1.5) -> dict[int, np.ndarray]:
+    """Linear array along the x-axis."""
+    xs = (np.arange(n) - (n - 1) / 2) * spacing
+    return {i: np.array([xs[i], 0.0]) for i in range(n)}
+
+
+def formation_grid(n: int, spacing: float = 1.5) -> dict[int, np.ndarray]:
+    """Rectangular grid, roughly square, centred at origin."""
+    cols = int(np.ceil(np.sqrt(n)))
+    pts = {i: np.array([i % cols * spacing, i // cols * spacing], dtype=float)
+           for i in range(n)}
+    ctr = np.mean(list(pts.values()), axis=0)
+    return {i: pts[i] - ctr for i in range(n)}
+
+
+def formation_vshape(n: int, spacing: float = 1.2) -> dict[int, np.ndarray]:
+    """V-formation (leader at front, two wings spreading back)."""
+    pts = {0: np.array([0.0, 0.0])}
+    for i in range(1, n):
+        side = 1 if i % 2 == 1 else -1
+        rank = (i + 1) // 2
+        pts[i] = np.array([side * rank * spacing, -rank * spacing])
+    ctr = np.mean(list(pts.values()), axis=0)
+    return {i: pts[i] - ctr for i in range(n)}
+
+
+def formation_polygon(n: int, side: float = 2.0) -> dict[int, np.ndarray]:
+    """Regular n-gon with the given side length."""
     R = side / (2.0 * np.sin(np.pi / n))
     ph = np.pi / n + np.pi / 2
     return {
@@ -32,19 +60,50 @@ def _make_polygon(n: int, side: float = 2.0) -> dict[int, np.ndarray]:
     }
 
 
+FORMATIONS: dict[str, object] = {
+    "polygon": formation_polygon,
+    "line": formation_line,
+    "grid": formation_grid,
+    "vshape": formation_vshape,
+}
+
+
+# ── chirality detection ───────────────────────────────────────────────────────
+
+def _detect_reflection(
+    theta: np.ndarray,
+    bearings: dict[int, float],
+    idx: int,
+) -> bool:
+    sp = theta[idx]
+    nbs = [j for j in bearings if j != idx]
+    votes = total = 0
+    for a in range(len(nbs)):
+        for b in range(a + 1, len(nbs)):
+            j, k = nbs[a], nbs[b]
+            vj = theta[j] - sp
+            vk = theta[k] - sp
+            cross_map = vj[0] * vk[1] - vj[1] * vk[0]
+            cross_real = np.sin(_wrap(bearings[k] - bearings[j]))
+            if abs(cross_map) < 1e-9 or abs(cross_real) < 1e-6:
+                continue
+            if np.sign(cross_map) != np.sign(cross_real):
+                votes += 1
+            total += 1
+    return (votes > total / 2) if total > 0 else False
+
+
+# ── main pipeline ─────────────────────────────────────────────────────────────
+
 def run(
     n: int,
     seed: int,
-    warmup: int = 8000,
-    ctrl: int = 150,
-    spt: int = 80,
-    gamma_lvp: float | None = None,
-    speed_limit: float | None = None,
-    verbose: bool = False,
+    formation_fn,
+    warmup: int = 4000,
+    ctrl: int = 120,
+    spt: int = 60,
+    fix_chirality: bool = True,
 ) -> dict:
-    gamma_lvp = gamma_lvp if gamma_lvp is not None else C.GAMMA_LVP
-    speed_limit = speed_limit if speed_limit is not None else C.SPEED_LIMIT
-
     sim = RobotSwarmSimulator(
         num_robots=n, noise_type=NoiseType.UNIFORM,
         noise_scale=C.NOISE_SCALE, area_size=C.AREA_SIZE,
@@ -63,15 +122,13 @@ def run(
                 M[i, j] = v
         return M
 
-    def _obs_batch(
-        i: int, xe: np.ndarray, tgt: int, Mrow: np.ndarray, Mall: np.ndarray
-    ) -> np.ndarray:
+    def _obs(i: int, xe: np.ndarray, tgt: int, Mrow: np.ndarray, Mall: np.ndarray) -> np.ndarray:
         sp = theta[i, i]
         d_it = Mrow[tgt]
         acc = np.zeros(len(xe))
         cnt = 0
         if d_it > 0:
-            Cv = 2.0 * (theta[i, tgt] - sp)
+            Cv = 2 * (theta[i, tgt] - sp)
             Cn = float(Cv @ Cv)
             if Cn > 1e-10:
                 D = float(theta[i, tgt] @ theta[i, tgt] - sp @ sp + d_it ** 2)
@@ -83,7 +140,7 @@ def run(
                 d_st = Mall[s, tgt]
                 if d_st <= 0:
                     continue
-                Cv = 2.0 * (theta[i, s] - sp)
+                Cv = 2 * (theta[i, s] - sp)
                 Cn = float(Cv @ Cv)
                 if Cn < 1e-10:
                     continue
@@ -92,44 +149,35 @@ def run(
                 cnt += 1
         return acc / max(cnt, 1)
 
-    def _spsa_step(a: float, b: float) -> np.ndarray:
+    def _spsa(a: float, b: float) -> np.ndarray:
         M = _noisy_matrix()
         new = theta.copy()
         for i in range(n):
             for tgt in range(n):
-                signs = np.random.choice([-1, 1], size=(C.N_GRADIENT_SAMPLES, 2))
-                dl = signs * _Da
+                dl = np.random.choice([-1, 1], size=(C.N_GRADIENT_SAMPLES, 2)) * _Da
                 base = theta[i, tgt]
-                yp = _obs_batch(i, base[None, :] + b * dl, tgt, M[i], M)
-                ym = _obs_batch(i, base[None, :] - b * dl, tgt, M[i], M)
+                yp = _obs(i, base[None, :] + b * dl, tgt, M[i], M)
+                ym = _obs(i, base[None, :] - b * dl, tgt, M[i], M)
                 grad = (((yp - ym) / (2 * b))[:, None] * dl).mean(0)
                 cons = C.GAMMA * np.sum(theta[:, tgt] - theta[i, tgt], axis=0)
                 new[i, tgt] = theta[i, tgt] - a * grad + a * cons
         return new
 
-    def _dist_res() -> float:
-        res = [
-            abs(
-                np.linalg.norm(sim.true_positions[i] - sim.true_positions[j])
-                - np.linalg.norm(theta[i, j] - theta[i, i])
-            )
-            for i in range(n)
-            for j in range(n)
-            if i != j
-        ]
-        return float(np.mean(res))
-
-    # warmup
     a, b = C.ALPHA, C.BETA
     for it in range(warmup):
-        theta = _spsa_step(a, b)
+        theta = _spsa(a, b)
         if (it + 1) % C.DECAY_EVERY == 0:
             a *= C.ALPHA_DECAY
             b *= C.BETA_DECAY
-    dr_warmup = _dist_res()
 
-    # Hungarian assignment
-    corners = _make_polygon(n, side=C.FORMATION_SIDE)
+    b_init = sim.measure_bearings()
+    reflected = _detect_reflection(theta[0], b_init[0], 0)
+    if fix_chirality and reflected:
+        for i in range(n):
+            ctr = theta[i].mean(axis=0)
+            theta[i, :, 1] = 2 * ctr[1] - theta[i, :, 1]
+
+    corners = formation_fn(n)
     mp = theta[0]
     Qw = np.array([corners[k] for k in range(n)])
     Qm = Qw - Qw.mean(axis=0) + mp.mean(axis=0)
@@ -142,14 +190,12 @@ def run(
         for i in range(n)
     }
 
-    # heading initialisation
     heading = np.zeros(n)
     rel_s = np.zeros(n)
     rel_c = np.zeros(n)
-    b0 = sim.measure_bearings()
     for i in range(n):
         sin_s = cos_s = 0.0
-        for j, phi in b0[i].items():
+        for j, phi in b_init[i].items():
             diff = theta[i, j] - theta[i, i]
             if np.linalg.norm(diff) < 1e-6:
                 continue
@@ -171,11 +217,10 @@ def run(
                 count += 1
         return total / count
 
-    # control phase
-    fe_hist = []
+    fes = []
     for tick in range(ctrl):
         for _ in range(spt):
-            theta = _spsa_step(a, b)
+            theta = _spsa(a, b)
 
         bb = sim.measure_bearings()
         sin_s = cos_s = 0.0
@@ -219,51 +264,40 @@ def run(
                 if nrm < 1e-9:
                     continue
                 u += (dij - d_star[i][j]) * (direction / nrm)
-            u *= gamma_lvp
+            u *= C.GAMMA_LVP
             h = heading[i]
             R = np.array([[np.cos(h), np.sin(h)], [-np.sin(h), np.cos(h)]])
             ch[i] = R @ u + joy
-        sim.apply_control(ch, speed_limit)
-        fe_hist.append(_form_err())
-        if verbose and tick % 30 == 0:
-            print(f"    tick {tick}: fe={fe_hist[-1]:.3f}")
+        sim.apply_control(ch, C.SPEED_LIMIT)
+        fes.append(_form_err())
 
-    fe = np.array(fe_hist)
-    P = np.array([sim.true_positions[i] for i in range(n)])
-    P = P - P.mean(axis=0)
-    Q = np.array([corners_asg[i] for i in range(n)])
-    Q = Q - Q.mean(axis=0)
-    _, S, _ = np.linalg.svd(P.T @ Q)
-    scale = float(S.sum() / (P * P).sum())
-
+    fes_arr = np.array(fes)
     return {
-        "n": n,
-        "seed": seed,
-        "dr_warmup": dr_warmup,
-        "fe_min": float(fe.min()),
-        "fe_tail": float(fe[-30:].mean()),
-        "scale": scale,
-        "dr_final": _dist_res(),
+        "reflected": reflected,
+        "fe_min": float(fes_arr.min()),
+        "fe_tail": float(fes_arr[-30:].mean()),
     }
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Fast scaling test for the SPSA+LVP pipeline")
+    parser = argparse.ArgumentParser(description="Test swarm formation shapes")
     parser.add_argument("--n", type=int, default=4, help="Number of robots")
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--warmup", type=int, default=8000)
-    parser.add_argument("--ctrl", type=int, default=150)
-    parser.add_argument("--spt", type=int, default=80, help="SPSA steps per tick")
-    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--formation", choices=list(FORMATIONS), default="polygon",
+        help="Formation shape",
+    )
+    parser.add_argument("--warmup", type=int, default=4000)
+    parser.add_argument("--ctrl", type=int, default=120)
+    parser.add_argument("--spt", type=int, default=60, help="SPSA steps per tick")
     args = parser.parse_args()
 
-    t0 = time.time()
-    r = run(args.n, args.seed, warmup=args.warmup, ctrl=args.ctrl,
-            spt=args.spt, verbose=args.verbose)
-    elapsed = time.time() - t0
+    fn = FORMATIONS[args.formation]
+    result = run(args.n, args.seed, fn,
+                 warmup=args.warmup, ctrl=args.ctrl, spt=args.spt)
     print(
-        f"N={r['n']} seed={r['seed']} ({elapsed:.0f}s): "
-        f"dr_wu={r['dr_warmup']:.3f} "
-        f"fe_tail={r['fe_tail']:.3f} "
-        f"scale={r['scale']:.3f}"
+        f"N={args.n} {args.formation} seed={args.seed}: "
+        f"reflected={result['reflected']} "
+        f"fe_min={result['fe_min']:.3f} "
+        f"fe_tail={result['fe_tail']:.3f}"
     )

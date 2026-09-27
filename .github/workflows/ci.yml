@@ -27,4 +27,4 @@ jobs:
         run: pytest tests/ -v
 
       - name: Smoke test — end-to-end pipeline (tiny scale)
-        run: PYTHONPATH=. python experiments/test_scale_fast.py --n 4 --seed 7 --warmup 200 --ctrl 5
+        run: PYTHONPATH=. python experiments/experiment_scale_fast.py --n 4 --seed 7 --warmup 200 --ctrl 5

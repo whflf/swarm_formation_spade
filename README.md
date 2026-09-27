@@ -147,10 +147,10 @@ python validation/validate_formation.py
 
 ```bash
 # 6 роботов, правильный шестиугольник
-python experiments/test_formations.py --n 6 --seed 7 --formation polygon
+python experiments/experiment_formations.py --n 6 --seed 7 --formation polygon
 
 # 8 роботов, прямоугольная сетка
-python experiments/test_formations.py --n 8 --formation grid --warmup 6000
+python experiments/experiment_formations.py --n 8 --formation grid --warmup 6000
 
 # Доступные формации: polygon, line, grid, vshape
 ```
@@ -159,10 +159,10 @@ python experiments/test_formations.py --n 8 --formation grid --warmup 6000
 
 ```bash
 # 20 роботов, полный прогон
-python experiments/test_scale_fast.py --n 20 --seed 7
+python experiments/experiment_scale_fast.py --n 20 --seed 7
 
 # Быстрая проверка
-python experiments/test_scale_fast.py --n 4 --seed 7 --warmup 200 --ctrl 5
+python experiments/experiment_scale_fast.py --n 4 --seed 7 --warmup 200 --ctrl 5
 ```
 
 ### Тесты
